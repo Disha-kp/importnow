@@ -1132,9 +1132,7 @@ function Hero({ onNavigate }) {
             <span>Trusted by 500+ Indian businesses</span>
           </div>
 
-          <h1 className="font-display font-extrabold text-[42px] sm:text-[52px] lg:text-[58px] text-[#111315] leading-[1.05] tracking-[-0.03em] mb-6">
-            Import directly
-            <br />
+<h1 className="font-display font-extrabold text-[48px] sm:text-[62px] lg:text-[72px] text-[#111315] leading-[1.03] tracking-[-0.035em] mb-7">            <br />
             from China.
             <br />
             <span className="text-[#E1472E]">
@@ -1144,8 +1142,7 @@ function Hero({ onNavigate }) {
             </span>
           </h1>
 
-          <p className="text-[16px] sm:text-[17.5px] text-[#4B5563] leading-[1.6] max-w-[490px] mb-8 font-normal">
-            Sourcing, factory inspection, shipping and customs, handled end to end by a team with its own company in Shanghai. You choose the product. We bring it to your door.
+<p className="text-[18px] sm:text-[20px] text-[#4B5563] leading-[1.6] max-w-[560px] mb-9 font-normal">            Sourcing, factory inspection, shipping and customs, handled end to end by a team with its own company in Shanghai. You choose the product. We bring it to your door.
           </p>
 
           <div className="flex flex-wrap items-center gap-3.5 mb-14">
