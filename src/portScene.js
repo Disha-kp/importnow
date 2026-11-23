@@ -264,16 +264,13 @@ const S = 1.3; // main ship scale
 const DOCK = { x: 13.5, z: 3.6 };
 const FAR = { x: 150, z: 18 };
 
-const SHIP_STAGES = [
-  { ...DOCK, ry: 0 },
-  { ...DOCK, ry: 0 },
-  { ...DOCK, ry: 0 },
-  { ...FAR, ry: 0 },
-  { ...DOCK, ry: Math.PI },
-  { ...DOCK, ry: Math.PI },
-];
+// scroll progress milestones (0..1)
+const LOAD_END = 0.58; // 6 crane cycles load the ship
+const DEPART_END = 0.64; // ship sails out of sight
+const ARRIVE_END = 0.72; // and comes back to the second port
+const UNLOAD_END = 0.92; // cranes unload, then delivery
 
-export function createPortScene(canvas, container, getStage) {
+export function createPortScene(canvas, container, getProgress) {
   const rng = makeRng(23);
   const scene = new THREE.Scene();
   const FOG = 0xd5dce3;
@@ -583,11 +580,28 @@ export function createPortScene(canvas, container, getStage) {
     trolley.add(hang);
     trolley.position.set(0, H - 0.05, 2.4);
     g.add(trolley);
-    trolleys.push({ trolley, hang, spreader, ropes, phase, H, s });
+
+    // container waiting on the ground at the pick point, and the pile it is delivered to
+    const mk = (col) =>
+      new THREE.Mesh(new THREE.BoxGeometry(CW, CH, CD), new THREE.MeshStandardMaterial({ map: boxMat.map, color: col, roughness: 0.6, metalness: 0.15 }));
+    const src = mk(0xa5382e);
+    src.position.set(0, CH / 2, -2.7);
+    src.castShadow = src.receiveShadow = true;
+    src.visible = false;
+    g.add(src);
+    const pile = [0x1d2c4d, 0xd0a238].map((col, k) => {
+      const m = mk(col);
+      m.position.set(k ? 0.06 : 0, CH / 2 + k * CH, -2.7);
+      m.castShadow = m.receiveShadow = true;
+      m.visible = false;
+      g.add(m);
+      return m;
+    });
+    trolleys.push({ trolley, hang, spreader, ropes, cargo, src, pile, H, s, x: cx, cur: null });
     scene.add(g);
   };
-  makeCrane(8.6, 1.18, 0, true); // prominent, closest to camera
-  makeCrane(20.5, 1.02, 2.1, true);
+  makeCrane(9.7, 1.18, 0, true); // prominent, closest to camera
+  makeCrane(17.1, 1.08, 2.1, true);
   makeCrane(38, 0.95, 4.2, false);
   makeCrane(62, 0.95, 1.3, false);
   makeCrane(86, 0.95, 3.3, false);
@@ -603,7 +617,7 @@ export function createPortScene(canvas, container, getStage) {
   hullShape.lineTo(-4.6, -1.0);
   const nameTex = textTexture('IMPORTNOW');
 
-  const buildShip = ({ cols = 8, name = true, seed = 1 } = {}) => {
+  const buildShip = ({ cols = 8, name = true, seed = 1, bays = false } = {}) => {
     const r = makeRng(seed);
     const ship = new THREE.Group();
     const extrude = (depth, mat, y) => {
@@ -634,12 +648,30 @@ export function createPortScene(canvas, container, getStage) {
 
     const stacks = [];
     for (let c = 0; c < cols; c++) {
+      if (bays && (c === 0 || c === cols - 1)) continue; // empty bays under the cranes
       for (let rr = -1; rr <= 1; rr++) {
         const h = 2 + ((r() * 3) | 0);
         for (let l = 0; l < h; l++) stacks.push({ x: -2.9 + c * (CW + 0.04), y: 0.58 + CH / 2 + l * CH, z: rr * (CD + 0.1) });
       }
     }
     ship.add(containerMesh(stacks, r, boxMat));
+
+    if (bays) {
+      const mkSlots = (x) =>
+        Array.from({ length: 6 }, (_, k) => {
+          const m = new THREE.Mesh(
+            new THREE.BoxGeometry(CW, CH, CD),
+            new THREE.MeshStandardMaterial({ map: boxMat.map, color: PALETTE[(r() * PALETTE.length) | 0], roughness: 0.6, metalness: 0.15 })
+          );
+          m.position.set(x, 0.58 + CH / 2 + Math.floor(k / 3) * CH, ((k % 3) - 1) * (CD + 0.1));
+          m.castShadow = m.receiveShadow = true;
+          m.visible = false;
+          ship.add(m);
+          return m;
+        });
+      ship.userData.slotsA = mkSlots(-2.9);
+      ship.userData.slotsB = mkSlots(-2.9 + (cols - 1) * (CW + 0.04));
+    }
 
     const white = new THREE.MeshStandardMaterial({ color: 0xf1f2f4, roughness: 0.7 });
     const bridge = new THREE.Mesh(new THREE.BoxGeometry(0.95, 1.5, 1.7), white);
@@ -678,7 +710,9 @@ export function createPortScene(canvas, container, getStage) {
     return ship;
   };
 
-  const ship = buildShip({ cols: 8, name: true, seed: 3 });
+  const ship = buildShip({ cols: 7, name: true, seed: 3, bays: true });
+  const slotsA = ship.userData.slotsA;
+  const slotsB = ship.userData.slotsB;
   const shipFlag = new THREE.Mesh(new THREE.PlaneGeometry(0.42, 0.28), flagMats.cn);
   shipFlag.position.set(-4.0, 3.05, 0.22);
   shipFlag.rotation.y = Math.PI / 2;
@@ -686,8 +720,7 @@ export function createPortScene(canvas, container, getStage) {
   ship.scale.setScalar(S);
   ship.position.set(DOCK.x, 0, DOCK.z);
   scene.add(ship);
-  const shipState = { x: DOCK.x, z: DOCK.z, ry: 0 };
-
+  
   // distant vessels crawling across the harbour
   const farShips = [
     { g: buildShip({ cols: 6, name: false, seed: 8 }), x: -60, z: 70, s: 0.7, v: 0.35, ry: 0 },
@@ -753,12 +786,66 @@ export function createPortScene(canvas, container, getStage) {
   };
   container.addEventListener('mousemove', onMove);
 
-  /* loop */
+  /* loop — everything is a function of scroll progress p */
   const clock = new THREE.Clock();
-  const look = new THREE.Vector3(9, 2.6, -1);
-  const tmp = new THREE.Vector3();
+  const look = new THREE.Vector3(10, 2.6, -1);
   let raf;
   let lastFlag = '';
+  const ease = (t) => {
+    t = THREE.MathUtils.clamp(t, 0, 1);
+    return t * t * (3 - 2 * t);
+  };
+  const lerp = THREE.MathUtils.lerp;
+  const wp = new THREE.Vector3();
+  const slotPose = (mesh, c) => {
+    mesh.getWorldPosition(wp);
+    return { x: (wp.x - c.x) / c.s, y: (wp.y - QUAY_TOP) / c.s, z: wp.z / c.s };
+  };
+  const PICK = { x: 0, y: CH / 2, z: -2.7 };
+  const CRUISE = 3.7;
+  const EMPTY = 2.9;
+
+  // one full crane cycle: grab -> lift -> carry forward -> lower a little -> set down -> return empty
+  const cyclePose = (u, a, b) => {
+    let f = 0;
+    let y;
+    if (u < 0.08) y = a.y;
+    else if (u < 0.27) y = lerp(a.y, CRUISE, ease((u - 0.08) / 0.19));
+    else if (u < 0.55) {
+      f = ease((u - 0.27) / 0.28);
+      y = CRUISE;
+    } else if (u < 0.68) {
+      f = 1;
+      y = lerp(CRUISE, b.y + 0.9, ease((u - 0.55) / 0.13));
+    } else if (u < 0.78) {
+      f = 1;
+      y = lerp(b.y + 0.9, b.y, ease((u - 0.68) / 0.1));
+    } else if (u < 0.86) {
+      f = 1;
+      y = lerp(b.y, EMPTY, ease((u - 0.78) / 0.08));
+    } else {
+      const t = ease((u - 0.86) / 0.14);
+      f = 1 - t;
+      y = lerp(EMPTY, a.y, t);
+    }
+    return { x: lerp(a.x, b.x, f), y, z: lerp(a.z, b.z, f) };
+  };
+
+  const CAM = [
+    { p: 0, az: -0.64, y: 11.5, r: 35, ly: 2.6 },
+    { p: 0.58, az: -0.04, y: 10.2, r: 36, ly: 2.6 },
+    { p: 0.64, az: 0.06, y: 8.2, r: 34, ly: 2.2 },
+    { p: 0.72, az: 0.08, y: 6.6, r: 31, ly: 1.8 },
+    { p: 1, az: -0.28, y: 8.6, r: 33, ly: 2.3 },
+  ];
+  const camAt = (p) => {
+    let i = 0;
+    while (i < CAM.length - 2 && p > CAM[i + 1].p) i++;
+    const a = CAM[i];
+    const b = CAM[i + 1];
+    const t = ease((p - a.p) / (b.p - a.p));
+    return { az: lerp(a.az, b.az, t), y: lerp(a.y, b.y, t), r: lerp(a.r, b.r, t), ly: lerp(a.ly, b.ly, t) };
+  };
 
   const tick = () => {
     raf = requestAnimationFrame(tick);
@@ -768,26 +855,29 @@ export function createPortScene(canvas, container, getStage) {
     }
     const dt = Math.min(clock.getDelta(), 0.05);
     const t = clock.elapsedTime;
-    const stage = getStage();
+    const p = THREE.MathUtils.clamp(getProgress(), 0, 1);
 
     water.material.uniforms.time.value += dt * 0.45;
 
-    // ship follows stage target with capped speed, then drifts very slowly
-    const target = SHIP_STAGES[stage] || SHIP_STAGES[0];
-    const dx = target.x - shipState.x;
-    const dz = target.z - shipState.z;
-    const dist = Math.hypot(dx, dz);
-    if (dist > 0.01) {
-      const speed = Math.min(26, dist * 1.1 + 0.4);
-      const step = Math.min(dist, speed * dt);
-      shipState.x += (dx / dist) * step;
-      shipState.z += (dz / dist) * step;
-    }
-    shipState.ry += (target.ry - shipState.ry) * Math.min(1, dt * 1.6);
-    const docked = dist < 0.5;
-    const drift = docked ? Math.sin(t * 0.07) * 0.7 : 0;
-    ship.position.set(shipState.x + drift, Math.sin(t * 0.9) * 0.025, shipState.z + Math.sin(t * 0.11) * 0.08);
-    ship.rotation.set(Math.sin(t * 0.6) * 0.004, shipState.ry, Math.sin(t * 0.8) * 0.01);
+    /* ship follows the scroll */
+    let sx = DOCK.x;
+    let sz = DOCK.z;
+    let sry = 0;
+    if (p >= LOAD_END && p < DEPART_END) {
+      const k = ease((p - LOAD_END) / (DEPART_END - LOAD_END));
+      sx = lerp(DOCK.x, FAR.x, k);
+      sz = lerp(DOCK.z, FAR.z, k);
+    } else if (p >= DEPART_END && p < ARRIVE_END) {
+      const k = (p - DEPART_END) / (ARRIVE_END - DEPART_END);
+      const e = 1 - Math.pow(1 - k, 2.2);
+      sx = lerp(FAR.x, DOCK.x, e);
+      sz = lerp(FAR.z, DOCK.z, e) + Math.sin(Math.PI * e) * 9; // swings toward the camera
+      sry = Math.PI;
+    } else if (p >= ARRIVE_END) sry = Math.PI;
+    const docked = p < LOAD_END || p >= ARRIVE_END;
+    ship.position.set(sx + (docked ? Math.sin(t * 0.07) * 0.2 : 0), Math.sin(t * 0.9) * 0.025, sz + Math.sin(t * 0.11) * 0.06);
+    ship.rotation.set(Math.sin(t * 0.6) * 0.004, sry, Math.sin(t * 0.8) * 0.01);
+    ship.updateMatrixWorld(true);
 
     farShips.forEach((f, i) => {
       f.x += f.v * dt;
@@ -796,8 +886,7 @@ export function createPortScene(canvas, container, getStage) {
       f.g.position.set(f.x, Math.sin(t * 0.7 + i) * 0.03, f.z);
     });
 
-    // flags swap with destination
-    const key = stage >= 4 ? 'in' : 'cn';
+    const key = p >= DEPART_END ? 'in' : 'cn';
     if (key !== lastFlag) {
       flag.material = flagMats[key];
       shipFlag.material = flagMats[key];
@@ -810,32 +899,76 @@ export function createPortScene(canvas, container, getStage) {
     }
     fp.needsUpdate = true;
 
-    // cranes: slow, gradual lifting
-    const shipNear = Math.hypot(shipState.x - DOCK.x, shipState.z - DOCK.z) < 8;
-    trolleys.forEach((c) => {
-      const p = c.phase;
-      c.trolley.position.z = 2.5 + Math.sin(t * 0.14 + p) * 1.3;
-      const lift = Math.sin(t * 0.22 + p) * 0.5 + 0.5;
-      const drop = shipNear ? 2.3 + lift * 2.6 : 2.6 + lift * 0.8;
-      c.hang.position.y = -0.2;
-      c.spreader.position.y = -drop;
+    /* cranes */
+    const loadC = THREE.MathUtils.clamp(p / LOAD_END, 0, 1) * 6;
+    const unloadC = THREE.MathUtils.clamp((p - ARRIVE_END) / (UNLOAD_END - ARRIVE_END), 0, 1) * 2;
+    const showAll = (list, v) => list.forEach((m) => (m.visible = v));
+
+    trolleys.forEach((c, i) => {
+      let target;
+      let carry = false;
+      let srcVis = false;
+      c.pile.forEach((m) => (m.visible = false));
+
+      if (p <= LOAD_END) {
+        const cc = i === 0 ? loadC : Math.min(loadC + 0.5, 6);
+        const n = Math.min(Math.floor(cc), 6);
+        const u = n >= 6 ? 0 : cc - n;
+        const list = i === 0 ? slotsA : slotsB;
+        const slot = slotPose(list[Math.min(n, 5)], c);
+        target = cyclePose(u, PICK, slot);
+        carry = u < 0.78;
+        srcVis = u >= 0.86 && n < 6;
+        list.forEach((m, k) => (m.visible = k < n || (k === n && n < 6 && u >= 0.78)));
+      } else if (p <= ARRIVE_END) {
+        target = { x: 0, y: CRUISE, z: 3.0 };
+        showAll(i === 0 ? slotsA : slotsB, true);
+      } else {
+        const cc = i === 0 ? unloadC : Math.min(unloadC + 0.5, 2);
+        const n = Math.min(Math.floor(cc), 2);
+        const u = n >= 2 ? 0 : cc - n;
+        const list = i === 0 ? slotsB : slotsA; // mirrored ship: each crane serves the opposite bay
+        const slot = slotPose(list[5 - n], c);
+        const to = { x: 0, y: CH / 2 + Math.min(n, 1) * CH, z: -2.7 };
+        target = cyclePose(u, slot, to);
+        carry = u < 0.78;
+        list.forEach((m, j) => {
+          const mIdx = 5 - j;
+          m.visible = !(mIdx < n || (mIdx === n && u >= 0.08));
+        });
+        c.pile.forEach((m, k) => (m.visible = k < n || (k === n && n < 2 && u >= 0.78)));
+      }
+
+      if (!c.cur) c.cur = { ...target };
+      const k = 1 - Math.exp(-dt * 9);
+      c.cur.x += (target.x - c.cur.x) * k;
+      c.cur.y += (target.y - c.cur.y) * k;
+      c.cur.z += (target.z - c.cur.z) * k;
+
+      const sy = c.cur.y + 0.49 - c.H;
+      c.trolley.position.z = c.cur.z;
+      c.hang.position.set(c.cur.x, -0.2, 0);
+      c.spreader.position.y = sy;
       c.ropes.forEach((r) => {
-        r.scale.y = drop;
-        r.position.set(r.userData.dx, -drop / 2, 0);
+        r.scale.y = -sy;
+        r.position.set(r.userData.dx, sy / 2, 0);
       });
+      c.cargo.visible = carry;
+      c.src.visible = srcVis;
     });
 
-    // truck rolls in at delivery
-    const truckTarget = stage >= 5 ? 22 : 70;
-    truckX += (truckTarget - truckX) * Math.min(1, dt * 0.6);
+    /* delivery truck */
+    const truckTarget = p >= UNLOAD_END ? 24 : 70;
+    truckX += (truckTarget - truckX) * Math.min(1, dt * 0.8);
     truck.position.x = truckX;
     truck.visible = truckX < 66;
 
-    // camera: very gentle cinematic drift
-    const sx = THREE.MathUtils.clamp(shipState.x * 0.1 - 0.8, 0, 12);
-    tmp.set(9 + sx, 2.6, -1);
-    look.lerp(tmp, Math.min(1, dt * 1.2));
-    camera.position.set(-12 + mx * 1.0 + Math.sin(t * 0.09) * 1.0, 11.5 - my * 0.5 + Math.sin(t * 0.07) * 0.25, 27 + Math.cos(t * 0.08) * 0.6);
+    /* camera orbit driven by scroll */
+    const cam = camAt(p);
+    const shipPull = THREE.MathUtils.clamp((sx - DOCK.x) * 0.05, 0, 5);
+    look.lerp(new THREE.Vector3(10 + shipPull, cam.ly, -1), Math.min(1, dt * 2));
+    const az = cam.az + mx * 0.03;
+    camera.position.set(look.x + Math.sin(az) * cam.r + Math.sin(t * 0.09) * 0.5, cam.y - my * 0.4 + Math.sin(t * 0.07) * 0.2, look.z + Math.cos(az) * cam.r);
     camera.lookAt(look);
 
     renderer.render(scene, camera);
